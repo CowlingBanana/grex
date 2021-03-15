@@ -18,6 +18,7 @@ use crate::ast::Expression;
 use crate::char::GraphemeCluster;
 use crate::fsm::DFA;
 use crate::regexp::config::RegExpConfig;
+use crate::regexp::Component;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -86,47 +87,36 @@ impl RegExp {
 impl Display for RegExp {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let ignore_case_flag = if self.config.is_case_insensitive_matching() {
-            "(?i)"
+            Component::IgnoreCaseFlag.to_repr(self.config.is_output_colorized)
         } else {
-            ""
+            String::new()
         };
-        let verbose_mode_flag = if self.config.is_case_insensitive_matching() {
-            "(?ix)"
-        } else {
-            "(?x)"
-        };
-        let left_parenthesis = if self.config.is_capturing_group_enabled() {
-            "("
-        } else {
-            "(?:"
-        };
-
+        let caret = Component::Caret.to_repr(self.config.is_output_colorized);
+        let dollar_sign = Component::DollarSign.to_repr(self.config.is_output_colorized);
         let mut regexp = match self.ast {
             Expression::Alternation(_, _) => {
-                if self.config.is_output_colorized {
-                    format!(
-                        "\u{1b}[40;93m{}\u{1b}[0m\u{1b}[1;33m^\u{1b}[0m\u{1b}[1;32m{}\u{1b}[0m{}\u{1b}[1;32m)\u{1b}[0m\u{1b}[1;33m$\u{1b}[0m", 
-                        ignore_case_flag, left_parenthesis, self.ast.to_string()
-                    )
-                } else {
-                    format!(
-                        "{}^{}{})$",
-                        ignore_case_flag,
-                        left_parenthesis,
-                        self.ast.to_string()
-                    )
-                }
+                format!(
+                    "{}{}{}{}",
+                    ignore_case_flag,
+                    caret,
+                    if self.config.is_capturing_group_enabled() {
+                        Component::CapturedParenthesizedExpression(self.ast.to_string())
+                            .to_repr(self.config.is_output_colorized)
+                    } else {
+                        Component::UncapturedParenthesizedExpression(self.ast.to_string())
+                            .to_repr(self.config.is_output_colorized)
+                    },
+                    dollar_sign
+                )
             }
             _ => {
-                if self.config.is_output_colorized {
-                    format!(
-                        "\u{1b}[40;93m{}\u{1b}[0m\u{1b}[1;33m^\u{1b}[0m{}\u{1b}[1;33m$\u{1b}[0m",
-                        ignore_case_flag,
-                        self.ast.to_string()
-                    )
-                } else {
-                    format!("{}^{}$", ignore_case_flag, self.ast.to_string())
-                }
+                format!(
+                    "{}{}{}{}",
+                    ignore_case_flag,
+                    caret,
+                    self.ast.to_string(),
+                    dollar_sign
+                )
             }
         };
 
@@ -135,76 +125,72 @@ impl Display for RegExp {
         }
 
         if self.config.is_verbose_mode_enabled {
-            let colored_flag = if self.config.is_output_colorized {
-                format!("\u{1b}[40;93m{}\u{1b}[0m", verbose_mode_flag)
-            } else {
-                verbose_mode_flag.to_string()
-            };
-            write!(f, "{}", apply_verbose_mode(regexp, colored_flag))
+            write!(f, "{}", apply_verbose_mode(regexp, &self.config))
         } else {
             write!(f, "{}", regexp)
         }
     }
 }
 
-fn apply_verbose_mode(regexp: String, verbose_mode_flag: String) -> String {
+fn apply_verbose_mode(regexp: String, config: &RegExpConfig) -> String {
     lazy_static! {
+        static ref ASTERISK: String = Component::Asterisk.to_colored_string(true);
+        static ref LEFT_BRACKET: String = Component::LeftBracket.to_colored_string(true);
+        static ref QUESTION_MARK: String = Component::QuestionMark.to_colored_string(true);
+        static ref REPETITION: String = Component::Repetition(0).to_colored_string(true);
+        static ref REPETITION_RANGE: String =
+            Component::RepetitionRange(0, 0).to_colored_string(true);
+        static ref RIGHT_BRACKET: String = Component::RightBracket.to_colored_string(true);
+        static ref INDENTATION_REVERSAL_REGEX_ONE: Regex = Regex::new(&format!(
+            "\n\\s+(?P<component>{}|{}|{}|{}|{})",
+            *ASTERISK, *QUESTION_MARK, *REPETITION, *REPETITION_RANGE, *RIGHT_BRACKET
+        ))
+        .unwrap();
+        static ref INDENTATION_REVERSAL_REGEX_TWO: Regex = Regex::new(&format!(
+            "(?P<component>{}|{})\n\\s+",
+            *LEFT_BRACKET, *RIGHT_BRACKET
+        ))
+        .unwrap();
+        static ref INDENTATION_REVERSAL_REGEX_THREE: Regex =
+            Regex::new(r"(?P<component1>\[[^\]]+\])\n\s+(?P<component2>[^\)\s]+)").unwrap();
+        static ref COLOR_MODE_REGEX: Regex =
+            Regex::new(r"\u{1b}\[\d+;\d+m[^\u{1b}]+\u{1b}\[0m|[^\u{1b}]+").unwrap();
         static ref VERBOSE_MODE_REGEX: Regex = Regex::new(
             r#"(?x)
-            (
-                (?:
-                    \u{1b}\[
-                    (?:
-                        1;31m   # red bold
-                        |
-                        1;35m   # purple bold
-                        |
-                        1;33m   # yellow bold
-                        |
-                        1;32m   # green bold
-                        |
-                        1;36m   # cyan bold
-                        |
-                        104;37m # white on bright blue
-                        |
-                        40;93m  # bright yellow on black
-                        |
-                        103;30m # black on bright yellow
-                        |
-                        0m      # color reset
-                    )
-                )*
-                (?:
-                    \(\?i\)
-                    |
-                    \( (?: \?: )?
-                    |
-                    \[.*\]
-                    |
-                    \) 
-                    (?: 
-                        \? 
-                        | 
-                        \{ \d+ (?: ,\d+ )? \}
-                    )
-                    |
-                    (?:
-                        (?: \\[\^$()|DdSsWw\\\ ] )+
-                        (?: \\* [^\^$|()\\] )*
-                    )+
-                    |
-                    (?:
-                        (?: \\* [^\^$()|\\] )+
-                        (?: \\[\^$()|DdSsWw\\\ ] )*
-                    )+
-                )
-            )
+            \(\?i\)
+            |
+            \[[^\]]+\]
+            |
+            \( (?: \?: )?
+            |
+            \) (?: \? | \{ \d+ (?: ,\d+ )? \} )?   
+            |   
+            [\^|$]
+            |
+            (?:
+                (?: \\[\^$()|DdSsWw\\\ ] )+
+                (?: \\* [^\^$|()\\] )*
+            )+
+            |
+            (?:
+                (?: \\* [^\^$()|\\] )+
+                (?: \\[\^$()|DdSsWw\\\ ] )*
+            )+
             "#
         )
         .unwrap();
     }
 
-    let regexp_with_static_replacements = regexp
+    let verbose_mode_flag = if config.is_case_insensitive_matching() {
+        Component::IgnoreCaseAndVerboseModeFlag.to_repr(config.is_output_colorized)
+    } else {
+        Component::VerboseModeFlag.to_repr(config.is_output_colorized)
+    };
+
+    let mut verbose_regexp = vec![verbose_mode_flag];
+    let mut nesting_level = 0;
+
+    let regexp_with_replacements = regexp
         .replace("(?i)", "")
         .replace("#", "\\#")
         .replace(" ", "\\s")
@@ -218,40 +204,59 @@ fn apply_verbose_mode(regexp: String, verbose_mode_flag: String) -> String {
         .replace("\u{2028}", "\\s")
         .replace(" ", "\\ ");
 
-    let regexp_with_dynamic_replacements = VERBOSE_MODE_REGEX
-        .replace_all(&regexp_with_static_replacements, "\n$1\n")
-        .to_string()
-        .replace("]\n\n", "]")
-        .replace("\n^", "^")
-        .replace("\n$\n", "\n$")
-        .replace("\n)$", "\n)\n$")
-        .replace("^$", "^\n$")
-        .replace(")\n\u{1b}[0m\u{1b}[1;35m?", ")\u{1b}[0m\u{1b}[1;35m?")
-        .replace(")\n\u{1b}[0m\u{1b}[1;33m\n$", ")\n\u{1b}[0m\u{1b}[1;33m$")
-        .replace(")\n\u{1b}[0m\u{1b}[104;37m{", ")\u{1b}[0m\u{1b}[104;37m{")
-        .replace(
-            "\u{1b}[1;33m^\n\u{1b}[0m\u{1b}[1;33m\n$\u{1b}[0m",
-            "\u{1b}[1;33m^\n\u{1b}[0m\u{1b}[1;33m$\u{1b}[0m",
-        );
+    if config.is_output_colorized {
+        for regexp_match in COLOR_MODE_REGEX.find_iter(&regexp_with_replacements) {
+            let element = regexp_match.as_str();
+            if element.is_empty() {
+                continue;
+            }
 
-    let mut verbose_regexp = vec![verbose_mode_flag];
-    let mut nesting_level = 0;
+            let is_colored_element = element.starts_with("\u{1b}[");
+            if is_colored_element && (element.contains('$') || element.contains(')')) {
+                nesting_level -= 1;
+            }
 
-    for line in regexp_with_dynamic_replacements.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        if line == "$" || line.ends_with("$\u{1b}[0m") || line.starts_with(')') {
-            nesting_level -= 1;
+            let indentation = "  ".repeat(nesting_level);
+            verbose_regexp.push(format!("{}{}", indentation, element));
+
+            if is_colored_element && (element.contains('^') || element.contains('(')) {
+                nesting_level += 1;
+            }
         }
 
-        let indentation = "  ".repeat(nesting_level);
-        verbose_regexp.push(format!("{}{}", indentation, line));
+        let joined_regexp = verbose_regexp.join("\n");
+        let mut joined_regexp_with_replacements = INDENTATION_REVERSAL_REGEX_ONE
+            .replace_all(&joined_regexp, "$component")
+            .to_string();
 
-        if line.ends_with('^') || line.ends_with("(?:") || line.ends_with('(') {
-            nesting_level += 1;
+        joined_regexp_with_replacements = INDENTATION_REVERSAL_REGEX_TWO
+            .replace_all(&joined_regexp_with_replacements, "$component")
+            .to_string();
+
+        joined_regexp_with_replacements
+    } else {
+        for regexp_match in VERBOSE_MODE_REGEX.find_iter(&regexp_with_replacements) {
+            let element = regexp_match.as_str();
+            if element.is_empty() {
+                continue;
+            }
+            if element == "$" || element.starts_with(')') {
+                nesting_level -= 1;
+            }
+            let indentation = "  ".repeat(nesting_level);
+            verbose_regexp.push(format!("{}{}", indentation, element));
+
+            if element == "^" || element.starts_with('(') {
+                nesting_level += 1;
+            }
         }
+
+        let joined_regexp = verbose_regexp.join("\n");
+
+        let joined_regexp_with_replacements = INDENTATION_REVERSAL_REGEX_THREE
+            .replace_all(&joined_regexp, "$component1$component2")
+            .to_string();
+
+        joined_regexp_with_replacements
     }
-
-    verbose_regexp.join("\n")
 }

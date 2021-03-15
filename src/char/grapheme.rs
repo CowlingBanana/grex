@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-use crate::regexp::RegExpConfig;
+use crate::regexp::{Component, RegExpConfig};
 use itertools::Itertools;
 use std::fmt::{Display, Formatter, Result};
 
 const CHARS_TO_ESCAPE: [&str; 14] = [
     "(", ")", "[", "]", "{", "}", "+", "*", "-", ".", "?", "|", "^", "$",
 ];
+
+const CHAR_CLASSES: [&str; 6] = ["\\d", "\\s", "\\w", "\\D", "\\S", "\\W"];
 
 #[derive(Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Grapheme {
@@ -162,65 +164,58 @@ impl Display for Grapheme {
             || (self.chars.len() == 1 && self.chars[0].matches('\\').count() == 1);
         let is_range = self.min < self.max;
         let is_repetition = self.min > 1;
-        let value = if self.repetitions.is_empty() {
+        let mut value = if self.repetitions.is_empty() {
             self.value()
         } else {
             self.repetitions.iter().map(|it| it.to_string()).join("")
         };
-        let left_parenthesis = if self.config.is_capturing_group_enabled() {
-            "("
-        } else {
-            "(?:"
-        };
-        let char_classes = vec!["\\d", "\\s", "\\w", "\\D", "\\S", "\\W"];
-        let colored_value = if self.config.is_output_colorized && char_classes.contains(&&*value) {
-            format!("\u{1b}[103;30m{}\u{1b}[0m", value)
-        } else {
-            value
-        };
+        value = Component::CharClass(value.clone())
+            .to_repr(self.config.is_output_colorized && CHAR_CLASSES.contains(&&*value));
 
         if !is_range && is_repetition && is_single_char {
-            if self.config.is_output_colorized {
-                write!(f, "{}\u{1b}[104;37m{{{}}}\u{1b}[0m", colored_value, self.min)
-            } else {
-                write!(f, "{}{{{}}}", colored_value, self.min)
-            }
+            write!(
+                f,
+                "{}{}",
+                value,
+                Component::Repetition(self.min).to_repr(self.config.is_output_colorized)
+            )
         } else if !is_range && is_repetition && !is_single_char {
-            if self.config.is_output_colorized {
-                write!(
-                    f,
-                    "\u{1b}[1;32m{}\u{1b}[0m{}\u{1b}[1;32m)\u{1b}[0m\u{1b}[104;37m{{{}}}\u{1b}[0m",
-                    left_parenthesis, colored_value, self.min
-                )
-            } else {
-                write!(f, "{}{}){{{}}}", left_parenthesis, colored_value, self.min)
-            }
+            write!(
+                f,
+                "{}{}",
+                if self.config.is_capturing_group_enabled() {
+                    Component::CapturedParenthesizedExpression(value)
+                        .to_repr(self.config.is_output_colorized)
+                } else {
+                    Component::UncapturedParenthesizedExpression(value)
+                        .to_repr(self.config.is_output_colorized)
+                },
+                Component::Repetition(self.min).to_repr(self.config.is_output_colorized)
+            )
         } else if is_range && is_single_char {
-            if self.config.is_output_colorized {
-                write!(
-                    f,
-                    "{}\u{1b}[104;37m{{{},{}}}\u{1b}[0m",
-                    colored_value, self.min, self.max
-                )
-            } else {
-                write!(f, "{}{{{},{}}}", colored_value, self.min, self.max)
-            }
+            write!(
+                f,
+                "{}{}",
+                value,
+                Component::RepetitionRange(self.min, self.max)
+                    .to_repr(self.config.is_output_colorized)
+            )
         } else if is_range && !is_single_char {
-            if self.config.is_output_colorized {
-                write!(
-                    f, 
-                    "\u{1b}[1;32m{}\u{1b}[0m{}\u{1b}[1;32m)\u{1b}[0m\u{1b}[104;37m{{{},{}}}\u{1b}[0m", 
-                    left_parenthesis, colored_value, self.min, self.max
-                )
-            } else {
-                write!(
-                    f,
-                    "{}{}){{{},{}}}",
-                    left_parenthesis, colored_value, self.min, self.max
-                )
-            }
+            write!(
+                f,
+                "{}{}",
+                if self.config.is_capturing_group_enabled() {
+                    Component::CapturedParenthesizedExpression(value)
+                        .to_repr(self.config.is_output_colorized)
+                } else {
+                    Component::UncapturedParenthesizedExpression(value)
+                        .to_repr(self.config.is_output_colorized)
+                },
+                Component::RepetitionRange(self.min, self.max)
+                    .to_repr(self.config.is_output_colorized)
+            )
         } else {
-            write!(f, "{}", colored_value)
+            write!(f, "{}", value)
         }
     }
 }

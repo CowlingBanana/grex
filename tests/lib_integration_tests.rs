@@ -530,6 +530,19 @@ mod no_conversion {
                     [ac]
                   )
                 $"#
+            )),
+            case(vec!["My ♥♥♥ is yours.", "My 💩💩 is yours."], indoc!(
+                r#"
+                (?x)
+                ^
+                  My\ 
+                  (?:
+                    💩{2}
+                    |
+                    ♥{3}
+                  )
+                  \ is\ yours\.
+                $"#
             ))
         )]
         fn succeeds_with_verbose_mode_option(test_cases: Vec<&str>, expected_output: &str) {

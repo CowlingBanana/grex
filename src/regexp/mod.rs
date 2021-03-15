@@ -15,6 +15,7 @@
  */
 
 mod builder;
+mod component;
 mod config;
 mod feature;
 
@@ -22,6 +23,7 @@ mod feature;
 mod regexp;
 
 pub use builder::RegExpBuilder;
+pub use component::Component;
 pub use config::RegExpConfig;
 pub use feature::Feature;
 pub use regexp::RegExp;
